@@ -9,7 +9,7 @@ use crate::{
 };
 use ethers::{
     abi::{Abi, Function},
-    types::{Action, Address, Call, CallResult, Create, CreateResult, Res, Suicide},
+    types::{Action, Address, Bytes, Call, CallResult, Create, CreateResult, Res, Suicide, H256},
 };
 use foundry_common::SELECTOR_LEN;
 use revm::interpreter::InstructionResult;
@@ -28,7 +28,6 @@ pub struct CallTraceNode {
     /// The call trace
     pub trace: CallTrace,
     /// Logs
-    #[serde(skip)]
     pub logs: Vec<RawOrDecodedLog>,
     /// Ordering of child calls and logs
     pub ordering: Vec<LogCallOrder>,
@@ -70,7 +69,7 @@ impl CallTraceNode {
                 // TODO deserialize from calldata here?
                 refund_address: Default::default(),
                 balance: self.trace.value,
-            })
+            });
         }
         match self.kind() {
             CallKind::Call | CallKind::StaticCall | CallKind::CallCode | CallKind::DelegateCall => {
@@ -142,7 +141,7 @@ impl CallTraceNode {
                             .find_map(|func| decode_cheatcode_outputs(func, bytes, verbosity))
                         {
                             self.trace.output = RawOrDecodedReturnData::Decoded(decoded);
-                            return
+                            return;
                         }
                     }
 

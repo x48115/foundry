@@ -1,9 +1,10 @@
 use crate::{
+    debug::Instruction,
     debug::Instruction::OpCode,
     executor::inspector::utils::{gas_used, get_create_address},
     trace::{
-        CallTrace, CallTraceArena, CallTraceStep, LogCallOrder, RawOrDecodedCall, RawOrDecodedLog,
-        RawOrDecodedReturnData,
+        CallTrace, CallTraceArena, CallTraceDecoderBuilder, CallTraceStep, LogCallOrder,
+        RawOrDecodedCall, RawOrDecodedLog, RawOrDecodedReturnData,
     },
     utils::{b160_to_h160, b256_to_h256, ru256_to_u256},
     CallKind,
@@ -13,15 +14,17 @@ use ethers::{
     abi::RawLog,
     types::{Address, U256},
 };
+use hex::ToHex;
 use revm::{
     inspectors::GasInspector,
     interpreter::{
         opcode, return_ok, CallInputs, CallScheme, CreateInputs, Gas, InstructionResult,
-        Interpreter,
+        Interpreter, Memory, Stack,
     },
     primitives::{B160, B256},
     Database, EVMData, Inspector, JournalEntry,
 };
+
 use std::{cell::RefCell, rc::Rc};
 
 /// An inspector that collects call traces.
@@ -56,6 +59,7 @@ impl Tracer {
         kind: CallKind,
         caller: Address,
     ) {
+        self.record_steps = true;
         self.trace_stack.push(self.traces.push_trace(
             0,
             CallTrace {
@@ -87,6 +91,26 @@ impl Tracer {
         trace.gas_cost = cost;
         trace.output = RawOrDecodedReturnData::Raw(output.into());
 
+        let filtered_steps: Vec<CallTraceStep> = trace
+            .steps
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.op,
+                    Instruction::OpCode(opcode::SSTORE)
+                        | Instruction::OpCode(opcode::SLOAD)
+                        | Instruction::OpCode(opcode::SHA3)
+                )
+            })
+            .cloned()
+            .collect();
+
+        trace.steps = filtered_steps;
+        trace.data_raw = trace.data.to_raw().into();
+        trace.output_raw = trace.output.to_raw().into();
+
+        // trace.is_precompile = CallTraceDecoder.is_(trace.address);
+
         if let Some(address) = address {
             trace.address = address;
         }
@@ -101,13 +125,18 @@ impl Tracer {
 
         let pc = interp.program_counter();
 
+        let op_code = OpCode(interp.contract.bytecode.bytecode()[pc]);
+
+        let dat = interp.memory.data().encode_hex();
         trace.trace.steps.push(CallTraceStep {
             depth: data.journaled_state.depth(),
             pc,
-            op: OpCode(interp.contract.bytecode.bytecode()[pc]),
+            op: op_code,
+            op_string: op_code.to_string(),
             contract: b160_to_h160(interp.contract.address),
             stack: interp.stack.clone(),
             memory: interp.memory.clone(),
+            memory_string: dat,
             gas: self.gas_inspector.borrow().gas_remaining(),
             gas_refund_counter: interp.gas.refunded() as u64,
             gas_cost: 0,
@@ -142,11 +171,25 @@ impl Tracer {
                     opcode::SLOAD | opcode::SSTORE,
                     Some(JournalEntry::StorageChange { address, key, .. }),
                 ) => {
-                    let value = data.journaled_state.state[address].storage[key].present_value();
-                    Some((ru256_to_u256(*key), value.into()))
+                    let slot = &data.journaled_state.state[address].storage[key];
+                    Some((
+                        ru256_to_u256(*key),
+                        slot.original_value().into(),
+                        slot.present_value().into(),
+                    ))
                 }
                 _ => None,
             };
+            if step.state_diff.is_some() {
+                let (key, old, new) = step.state_diff.unwrap();
+                let key_s = format!("{:#x}", key);
+                let old_s = format!("{:#x}", old);
+                let new_s = format!("{:#x}", new);
+
+                println!("KEY {}", key_s);
+                println!("OLD {}", old_s);
+                println!("NEW {}", new_s);
+            }
 
             step.gas_cost = step.gas - self.gas_inspector.borrow().gas_remaining();
         }
@@ -169,7 +212,7 @@ where
         _is_static: bool,
     ) -> InstructionResult {
         if !self.record_steps {
-            return InstructionResult::Continue
+            return InstructionResult::Continue;
         }
 
         self.start_step(interp, data);
@@ -192,7 +235,7 @@ where
         status: InstructionResult,
     ) -> InstructionResult {
         if !self.record_steps {
-            return InstructionResult::Continue
+            return InstructionResult::Continue;
         }
 
         self.fill_step(interp, data, status);

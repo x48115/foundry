@@ -290,9 +290,11 @@ impl CallTraceDecoder {
 
     async fn decode_event(&self, log: &mut RawOrDecodedLog) {
         if let RawOrDecodedLog::Raw(raw_log) = log {
+            let cloned = raw_log.clone();
             // do not attempt decoding if no topics
+
             if raw_log.topics.is_empty() {
-                return
+                return;
             }
 
             let mut events = vec![];
@@ -312,6 +314,7 @@ impl CallTraceDecoder {
                 if let Ok(decoded) = event.parse_log(raw_log.clone()) {
                     *log = RawOrDecodedLog::Decoded(
                         event.name,
+                        cloned,
                         decoded
                             .params
                             .into_iter()
@@ -326,7 +329,7 @@ impl CallTraceDecoder {
                             })
                             .collect(),
                     );
-                    break
+                    break;
                 }
             }
         }

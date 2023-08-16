@@ -131,8 +131,8 @@ impl TestArgs {
         let mut project = config.project()?;
 
         // install missing dependencies
-        if install::install_missing_dependencies(&mut config, &project, self.build_args().silent) &&
-            config.auto_detect_remappings
+        if install::install_missing_dependencies(&mut config, &project, self.build_args().silent)
+            && config.auto_detect_remappings
         {
             // need to re-configure here to also catch additional remappings
             config = self.load_config();
@@ -369,7 +369,7 @@ impl TestOutcome {
     pub fn ensure_ok(&self) -> eyre::Result<()> {
         let failures = self.failures().count();
         if self.allow_failure || failures == 0 {
-            return Ok(())
+            return Ok(());
         }
 
         if !shell::verbosity().is_normal() {
@@ -382,7 +382,7 @@ impl TestOutcome {
         for (suite_name, suite) in self.results.iter() {
             let failures = suite.failures().count();
             if failures == 0 {
-                continue
+                continue;
             }
 
             let term = if failures > 1 { "tests" } else { "test" };
@@ -422,6 +422,7 @@ impl TestOutcome {
 }
 
 fn short_test_result(name: &str, result: &TestResult) {
+    println!("testoor");
     let status = if result.success {
         Paint::green("[PASS]".to_string())
     } else {
@@ -533,6 +534,7 @@ fn test(
 
         'outer: for (contract_name, suite_result) in rx {
             let mut tests = suite_result.test_results.clone();
+
             println!();
             for warning in suite_result.warnings.iter() {
                 eprintln!("{} {warning}", Paint::yellow("Warning:").bold());
@@ -546,7 +548,7 @@ fn test(
 
                 // If the test failed, we want to stop processing the rest of the tests
                 if fail_fast && !result.success {
-                    break 'outer
+                    break 'outer;
                 }
 
                 // We only display logs at level 2 and above
@@ -598,6 +600,15 @@ fn test(
 
                         // We decode the trace if we either need to build a gas report or we need
                         // to print it
+                        let a = trace.arena.first();
+                        let trace0 = (a.unwrap()).clone().trace;
+                        let datas = trace0.data.to_raw();
+                        let hex_string: String =
+                            datas.iter().map(|byte| format!("{:02x}", byte)).collect();
+
+                        println!("!Calldata!");
+                        println!("{}", hex_string);
+
                         if should_include || gas_reporting {
                             rt.block_on(decoder.decode(trace));
                         }
@@ -608,7 +619,7 @@ fn test(
                     }
 
                     if !decoded_traces.is_empty() {
-                        println!("Traces:");
+                        println!("Traces3:");
                         decoded_traces.into_iter().for_each(|trace| println!("{trace}"));
                     }
 

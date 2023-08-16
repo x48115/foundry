@@ -140,10 +140,10 @@ impl EthTransactionRequest {
                 }))
             }
             // EIP1559
-            (Some(2), None, _, _, _) |
-            (None, None, Some(_), _, _) |
-            (None, None, _, Some(_), _) |
-            (None, None, None, None, None) => {
+            (Some(2), None, _, _, _)
+            | (None, None, Some(_), _, _)
+            | (None, None, _, Some(_), _)
+            | (None, None, None, None, None) => {
                 // Empty fields fall back to the canonical transaction schema.
                 Some(TypedTransactionRequest::EIP1559(EIP1559TransactionRequest {
                     nonce: nonce.unwrap_or(U256::zero()),
@@ -445,7 +445,7 @@ impl MaybeImpersonatedTransaction {
     #[cfg(feature = "impersonated-tx")]
     pub fn recover(&self) -> Result<Address, SignatureError> {
         if let Some(sender) = self.impersonated_sender {
-            return Ok(sender)
+            return Ok(sender);
         }
         self.transaction.recover()
     }
@@ -458,7 +458,7 @@ impl MaybeImpersonatedTransaction {
     pub fn hash(&self) -> H256 {
         if self.transaction.is_impersonated() {
             if let Some(sender) = self.impersonated_sender {
-                return self.transaction.impersonated_hash(sender)
+                return self.transaction.impersonated_hash(sender);
             }
         }
         self.transaction.hash()
@@ -742,14 +742,14 @@ impl Decodable for TypedTransaction {
         let data = rlp.data()?;
         let first = *data.first().ok_or(DecoderError::Custom("empty slice"))?;
         if rlp.is_list() {
-            return Ok(TypedTransaction::Legacy(rlp.as_val()?))
+            return Ok(TypedTransaction::Legacy(rlp.as_val()?));
         }
         let s = data.get(1..).ok_or(DecoderError::Custom("no tx body"))?;
         if first == 0x01 {
-            return rlp::decode(s).map(TypedTransaction::EIP2930)
+            return rlp::decode(s).map(TypedTransaction::EIP2930);
         }
         if first == 0x02 {
-            return rlp::decode(s).map(TypedTransaction::EIP1559)
+            return rlp::decode(s).map(TypedTransaction::EIP1559);
         }
         Err(DecoderError::Custom("invalid tx type"))
     }
@@ -918,7 +918,7 @@ impl Encodable for LegacyTransaction {
 impl Decodable for LegacyTransaction {
     fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
         if rlp.item_count()? != 9 {
-            return Err(DecoderError::RlpIncorrectListLen)
+            return Err(DecoderError::RlpIncorrectListLen);
         }
 
         let v = rlp.val_at(6)?;
@@ -998,7 +998,7 @@ impl Encodable for EIP2930Transaction {
 impl Decodable for EIP2930Transaction {
     fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
         if rlp.item_count()? != 11 {
-            return Err(DecoderError::RlpIncorrectListLen)
+            return Err(DecoderError::RlpIncorrectListLen);
         }
 
         Ok(Self {
@@ -1088,7 +1088,7 @@ impl Encodable for EIP1559Transaction {
 impl Decodable for EIP1559Transaction {
     fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
         if rlp.item_count()? != 12 {
-            return Err(DecoderError::RlpIncorrectListLen)
+            return Err(DecoderError::RlpIncorrectListLen);
         }
 
         Ok(Self {
@@ -1287,7 +1287,7 @@ impl TransactionInfo {
     pub fn trace_address(&self, idx: usize) -> Vec<usize> {
         if idx == 0 {
             // root call has empty traceAddress
-            return vec![]
+            return vec![];
         }
         let mut graph = vec![];
         let mut node = &self.traces.arena[idx];

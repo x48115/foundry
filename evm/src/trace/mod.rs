@@ -1,6 +1,7 @@
 use crate::{
     abi::CHEATCODE_ADDRESS, debug::Instruction, trace::identifier::LocalTraceIdentifier, CallKind,
 };
+
 pub use decoder::{CallTraceDecoder, CallTraceDecoderBuilder};
 use ethers::{
     abi::{ethereum_types::BigEndianHash, Address, RawLog},
@@ -11,7 +12,7 @@ use foundry_common::contracts::{ContractsByAddress, ContractsByArtifact};
 use hashbrown::HashMap;
 use node::CallTraceNode;
 use revm::interpreter::{opcode, CallContext, InstructionResult, Memory, Stack};
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeMap, Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fmt::{self, Write},
@@ -82,7 +83,7 @@ impl CallTraceArena {
             .map(|node| {
                 if node.trace.created() {
                     if let RawOrDecodedReturnData::Raw(ref bytes) = node.trace.output {
-                        return (&node.trace.address, Some(bytes.as_ref()))
+                        return (&node.trace.address, Some(bytes.as_ref()));
                     }
                 }
 
@@ -107,7 +108,7 @@ impl CallTraceArena {
             // Fill in memory and storage depending on the options
             if !opts.disable_storage.unwrap_or_default() {
                 let contract_storage = storage.entry(step.contract).or_default();
-                if let Some((key, value)) = step.state_diff {
+                if let Some((key, _, value)) = step.state_diff {
                     contract_storage.insert(H256::from_uint(&key), H256::from_uint(&value));
                     log.storage = Some(contract_storage.clone());
                 }
@@ -127,12 +128,12 @@ impl CallTraceArena {
                 Instruction::OpCode(opc) => {
                     match opc {
                         // If yes, descend into a child trace
-                        opcode::CREATE |
-                        opcode::CREATE2 |
-                        opcode::DELEGATECALL |
-                        opcode::CALL |
-                        opcode::STATICCALL |
-                        opcode::CALLCODE => {
+                        opcode::CREATE
+                        | opcode::CREATE2
+                        | opcode::DELEGATECALL
+                        | opcode::CALL
+                        | opcode::STATICCALL
+                        | opcode::CALLCODE => {
                             self.add_to_geth_trace(
                                 storage,
                                 &self.arena[trace_node.children[child_id]],
@@ -156,7 +157,7 @@ impl CallTraceArena {
         opts: GethDebugTracingOptions,
     ) -> DefaultFrame {
         if self.arena.is_empty() {
-            return Default::default()
+            return Default::default();
         }
 
         let mut storage = HashMap::new();
@@ -256,6 +257,13 @@ impl fmt::Display for CallTraceArena {
     }
 }
 
+// pub struct RawLog2 {
+//     /// Indexed event params are represented as log topics.
+//     pub topics: Vec<Hash>,
+//     /// Others are just plain data.
+//     pub data: Bytes,
+// }
+
 /// A raw or decoded log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RawOrDecodedLog {
@@ -265,7 +273,78 @@ pub enum RawOrDecodedLog {
     ///
     /// The first member of the tuple is the event name, and the second is a vector of decoded
     /// parameters.
-    Decoded(String, Vec<(String, String)>),
+    Decoded(String, RawLog, Vec<(String, String)>),
+}
+
+// impl RawOrDecodedLog {
+// pub fn to_raw(&self) -> Vec<u8> {
+//     match self {
+//         RawOrDecodedLog::Raw(raw) => raw.to_vec(),
+//         RawOrDecodedLog::Decoded(_, _, _) => {
+//             vec![]
+//         }
+//     }
+// }
+// pub fn to_bytes(&self) -> Bytes {
+//     match self {
+//         RawOrDecodedLog::Raw(raw) => raw,
+//         RawOrDecodedLog::Decoded(val, _) => val.as_bytes().to_vec().into(),
+//     }
+// }
+
+// pub fn to_raw(&self) -> Vec<u8> {
+//     self.to_bytes().to_vec()
+// }
+// }
+
+impl<'de> Deserialize<'de> for RawOrDecodedLog {
+    fn deserialize<D>(_: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(RawOrDecodedLog::Raw(RawLog { topics: Default::default(), data: Default::default() }))
+    }
+}
+
+impl Serialize for RawOrDecodedLog {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // serializer.serialize_str("read")
+        match self {
+            RawOrDecodedLog::Raw(raw_log) => {
+                let data = raw_log
+                    .data
+                    .iter()
+                    .map(|byte| format!("{:02X}", byte))
+                    .collect::<Vec<String>>()
+                    .join("");
+
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "raw")?;
+                map.serialize_entry("topics", &raw_log.topics)?;
+                map.serialize_entry("data", &data)?;
+                map.end()
+            }
+            RawOrDecodedLog::Decoded(_event_name, _raw_log, _parameters) => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                let data = _raw_log
+                    .data
+                    .iter()
+                    .map(|byte| format!("{:02X}", byte))
+                    .collect::<Vec<String>>()
+                    .join("");
+
+                map.serialize_entry("type", "decoded")?;
+                map.serialize_entry("data", &data)?;
+                map.serialize_entry("topics", &_raw_log.topics)?;
+                map.serialize_entry("event_name", &_event_name)?;
+                map.serialize_entry("parameters", &_parameters)?;
+                map.end()
+            }
+        }
+    }
 }
 
 impl fmt::Display for RawOrDecodedLog {
@@ -287,7 +366,7 @@ impl fmt::Display for RawOrDecodedLog {
                     Paint::cyan(format!("0x{}", hex::encode(&log.data)))
                 )
             }
-            RawOrDecodedLog::Decoded(name, params) => {
+            RawOrDecodedLog::Decoded(name, log, params) => {
                 let params = params
                     .iter()
                     .map(|(name, value)| format!("{name}: {value}"))
@@ -392,12 +471,15 @@ pub struct CallTraceStep {
     pub pc: usize,
     /// Opcode to be executed
     pub op: Instruction,
+    /// Opcode string
+    pub op_string: String,
     /// Current contract address
     pub contract: Address,
     /// Stack before step execution
     pub stack: Stack,
     /// Memory before step execution
     pub memory: Memory,
+    pub memory_string: String,
     /// Remaining gas before step execution
     pub gas: u64,
     /// Gas refund counter before step execution
@@ -407,7 +489,7 @@ pub struct CallTraceStep {
     /// Gas cost of step execution
     pub gas_cost: u64,
     /// Change of the contract state after step execution (effect of the SLOAD/SSTORE instructions)
-    pub state_diff: Option<(U256, U256)>,
+    pub state_diff: Option<(U256, U256, U256)>,
     /// Error (if any) after step execution
     pub error: Option<String>,
 }
@@ -455,15 +537,19 @@ pub struct CallTrace {
     pub caller: Address,
     /// The destination address of the call or the address from the created contract
     pub address: Address,
+    /// Whether or not address is a precompile
+    pub is_precompile: bool,
     /// The kind of call this is
     pub kind: CallKind,
     /// The value transferred in the call
     pub value: U256,
     /// The calldata for the call, or the init code for contract creations
     pub data: RawOrDecodedCall,
+    pub data_raw: Bytes,
     /// The return data of the call if this was not a contract creation, otherwise it is the
     /// runtime bytecode of the created contract
     pub output: RawOrDecodedReturnData,
+    pub output_raw: Bytes,
     /// The gas cost of the call
     pub gas_cost: u64,
     /// The status of the trace's call
@@ -492,10 +578,13 @@ impl Default for CallTrace {
             label: Default::default(),
             caller: Default::default(),
             address: Default::default(),
+            is_precompile: Default::default(),
             kind: Default::default(),
             value: Default::default(),
             data: Default::default(),
+            data_raw: Default::default(),
             output: Default::default(),
+            output_raw: Default::default(),
             gas_cost: Default::default(),
             status: InstructionResult::Continue,
             call_context: Default::default(),
@@ -594,7 +683,7 @@ pub fn load_contracts(
             .iter()
             .filter_map(|(addr, name)| {
                 if let Ok(Some((_, (abi, _)))) = contracts.find_by_name_or_identifier(name) {
-                    return Some((*addr, (name.clone(), abi.clone())))
+                    return Some((*addr, (name.clone(), abi.clone())));
                 }
                 None
             })

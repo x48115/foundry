@@ -1,12 +1,17 @@
 use crate::{init_progress, opts::RpcOpts, update_progress, utils};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json;
+
 use cast::{
     executor::{EvmError, ExecutionErr},
     trace::{identifier::SignaturesIdentifier, CallTraceDecoder, Traces},
 };
 use clap::Parser;
 use ethers::{
-    abi::Address,
+    abi::{ethabi::Bytes, Address, RawLog},
     prelude::{artifacts::ContractBytecodeSome, ArtifactId, Middleware},
+    types::H256,
+    utils::keccak256,
 };
 use eyre::WrapErr;
 use forge::{
@@ -20,7 +25,11 @@ use forge::{
     utils::h256_to_b256,
 };
 use foundry_config::{find_project_root_path, Config};
-use foundry_evm::utils::evm_spec;
+use foundry_evm::{
+    debug::Instruction,
+    revm::interpreter::opcode::{self, SHA3},
+    utils::{evm_spec, ru256_to_u256},
+};
 use std::{collections::BTreeMap, str::FromStr};
 use tracing::trace;
 use ui::{TUIExitReason, Tui, Ui};
@@ -121,7 +130,7 @@ impl RunArgs {
 
                 for (index, tx) in block.transactions.into_iter().enumerate() {
                     if tx.hash().eq(&tx_hash) {
-                        break
+                        break;
                     }
 
                     configure_tx_env(&mut env, &tx);
@@ -143,12 +152,11 @@ impl RunArgs {
             }
         }
 
+        println!("Executoor");
         // Execute our transaction
+        let preimages: Vec<PreImage> = vec![];
         let mut result = {
-            executor
-                .set_tracing(true)
-                .set_debugger(self.debug)
-                .set_trace_printer(self.trace_printer);
+            executor.set_tracing(true).set_debugger(true).set_trace_printer(self.trace_printer);
 
             configure_tx_env(&mut env, &tx);
 
@@ -163,7 +171,12 @@ impl RunArgs {
                     ..
                 } = executor.commit_tx_with_env(env).unwrap();
 
+                // let b = traces.clone().unwrap().arena;
+                // let c = &b[0].logs;
+                // let d = &c[0];
+
                 RunResult {
+                    preimages,
                     success: !reverted,
                     traces: vec![(TraceKind::Execution, traces.unwrap_or_default())],
                     debug: run_debug.unwrap_or_default(),
@@ -174,6 +187,7 @@ impl RunArgs {
                 match executor.deploy_with_env(env, None) {
                     Ok(DeployResult { gas_used, traces, debug: run_debug, .. }) => RunResult {
                         success: true,
+                        preimages,
                         traces: vec![(TraceKind::Execution, traces.unwrap_or_default())],
                         debug: run_debug.unwrap_or_default(),
                         gas_used,
@@ -183,6 +197,7 @@ impl RunArgs {
                             *inner;
                         RunResult {
                             success: !reverted,
+                            preimages,
                             traces: vec![(TraceKind::Execution, traces.unwrap_or_default())],
                             debug: run_debug.unwrap_or_default(),
                             gas_used,
@@ -195,6 +210,19 @@ impl RunArgs {
             }
         };
 
+        if result.debug.arena.len() > 0 {
+            let dog = &result.debug.arena[0].steps;
+            println!("muh len {}", dog.len());
+        }
+
+        // let op_code = OpCode(interp.contract.bytecode.bytecode()[pc]);
+        // let opp = interp.contract.bytecode.bytecode()[pc];
+        // println!("{}", op_code);
+
+        // if !(opp == opcode::SSTORE || opp == opcode::SLOAD) {
+        //     return;
+        // }
+
         let mut etherscan_identifier =
             EtherscanIdentifier::new(&config, evm_opts.get_remote_chain_id())?;
 
@@ -203,7 +231,7 @@ impl RunArgs {
 
             if let Some(addr) = iter.next() {
                 if let (Ok(address), Some(label)) = (Address::from_str(addr), iter.next()) {
-                    return Some((address, label.to_string()))
+                    return Some((address, label.to_string()));
                 }
             }
             None
@@ -220,12 +248,12 @@ impl RunArgs {
             decoder.identify(trace, &mut etherscan_identifier);
         }
 
-        if self.debug {
-            let (sources, bytecode) = etherscan_identifier.get_compiled_contracts().await?;
-            run_debugger(result, decoder, bytecode, sources)?;
-        } else {
-            print_traces(&mut result, decoder, self.verbose).await?;
-        }
+        // if self.debug {
+        //     let (sources, bytecode) = etherscan_identifier.get_compiled_contracts().await?;
+        //     run_debugger(result, decoder, bytecode, sources)?;
+        // } else {
+        print_traces(&mut result, decoder, self.verbose).await?;
+        // }
         Ok(())
     }
 }
@@ -261,20 +289,37 @@ fn run_debugger(
 async fn print_traces(
     result: &mut RunResult,
     decoder: CallTraceDecoder,
-    verbose: bool,
+    _verbose: bool,
 ) -> eyre::Result<()> {
     if result.traces.is_empty() {
         eyre::bail!("Unexpected error: No traces. Please report this as a bug: https://github.com/foundry-rs/foundry/issues/new?assignees=&labels=T-bug&template=BUG-FORM.yml");
     }
 
-    println!("Traces:");
+    println!("Traces4:");
+    let mut preimages: Vec<PreImage> = vec![];
+    for (_, call_trace_arena) in &result.traces {
+        let nodes = &call_trace_arena.arena;
+        for node in nodes {
+            let steps = &node.trace.steps;
+            for step in steps {
+                if step.op == Instruction::OpCode(opcode::SHA3) {
+                    let stack = step.stack.data();
+                    let size = ru256_to_u256(stack[stack.len() - 2]).as_usize();
+                    let offset = ru256_to_u256(stack[stack.len() - 1]).as_usize();
+                    let pre_image = step.memory.get_slice(offset, size).to_vec();
+                    let hash = hex::encode(keccak256(&pre_image));
+                    let key_and_slot = hex::encode(&pre_image[0..64]);
+                    let preimage = PreImage { hash, key_and_slot };
+                    preimages.push(preimage);
+                }
+            }
+        }
+    }
+    result.preimages = preimages;
     for (_, trace) in &mut result.traces {
         decoder.decode(trace).await;
-        if !verbose {
-            println!("{trace}");
-        } else {
-            println!("{trace:#}");
-        }
+
+        println!("{trace:#}");
     }
     println!();
 
@@ -284,13 +329,26 @@ async fn print_traces(
         println!("{}", Paint::red("Transaction failed."));
     }
 
+    let json_string = serde_json::to_string(&result).unwrap();
+
+    println!("{}", json_string);
+
     println!("Gas used: {}", result.gas_used);
     Ok(())
 }
 
+#[derive(Serialize)]
 struct RunResult {
     pub success: bool,
     pub traces: Traces,
+    pub preimages: Vec<PreImage>,
+    #[serde(skip)]
     pub debug: DebugArena,
     pub gas_used: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PreImage {
+    hash: String,
+    key_and_slot: String,
 }

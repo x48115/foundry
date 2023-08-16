@@ -147,8 +147,8 @@ impl Executor {
             .basic(h160_to_b160(DEFAULT_CREATE2_DEPLOYER))?
             .ok_or(DatabaseError::MissingAccount(DEFAULT_CREATE2_DEPLOYER))?;
 
-        if create2_deployer_account.code.is_none() ||
-            create2_deployer_account.code.as_ref().unwrap().is_empty()
+        if create2_deployer_account.code.is_none()
+            || create2_deployer_account.code.as_ref().unwrap().is_empty()
         {
             let creator = "0x3fAB184622Dc19b6109349B94811493BF2a45362".parse().unwrap();
 
@@ -392,6 +392,7 @@ impl Executor {
         if let Some(changes) = result.state_changeset.as_ref() {
             self.backend_mut().commit(changes.clone());
         }
+
         // Persist the changed block environment
         self.inspector_config.block = result.env.block.clone();
         // Persist cheatcode state
@@ -478,7 +479,7 @@ impl Executor {
                     state_changeset: None,
                     transactions: None,
                     script_wallets,
-                })))
+                })));
             }
         };
 
@@ -548,7 +549,7 @@ impl Executor {
     ) -> Result<bool, DatabaseError> {
         if self.backend().has_snapshot_failure() {
             // a failure occurred in a reverted snapshot, which is considered a failed test
-            return Ok(should_fail)
+            return Ok(should_fail);
         }
 
         // Construct a new VM with the state changeset
